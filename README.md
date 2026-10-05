@@ -7,14 +7,15 @@ Multi-tenant mobile and desktop farm monitoring app with a MySQL backend. Farms 
 | Area | Functions |
 | --- | --- |
 | Accounts | Register a farm and owner, sign in with farm name and email, manage users in owner/admin/operator/viewer roles, sign out. |
-| Overview | Latest moisture and temperature, plot/device counts, soil moisture trend, recent activity, latest photo, threshold alerts. |
+| Overview | Latest moisture and temperature, plot/device counts, soil moisture trend, recent activity, latest photo, persistent threshold alerts, manual refresh. |
+| Alert center | Tenant-scoped warning/critical alerts from new readings; acknowledge, resolve with a note, reopen, bulk actions, status/severity/plot/search filters, CSV export, and periodic refresh. |
 | Field records | Save readings or compressed plot photos with time and notes; filter, view, delete, and export records. |
 | Plots | Add, edit, and delete plots with crop and area details. |
 | Devices | Add sensor/camera/gateway devices, assign plots, edit status, rotate or revoke one-time ingest keys, view last-seen time. |
 | Settings | Set alert thresholds, import readings CSV, export JSON snapshot, review audit events. |
 | Mobile | Responsive browser interface and installable PWA; camera capture on supported devices. |
 
-This is one web/PWA codebase, not separate native Android and iOS apps. Alerts appear on the dashboard; email, SMS, and push notifications are not implemented.
+This is one web/PWA codebase, not separate native Android and iOS apps. Alerts are in-app; email, SMS, and push notifications are not implemented.
 
 ## Roles
 
@@ -22,6 +23,7 @@ This is one web/PWA codebase, not separate native Android and iOS apps. Alerts a
 | --- | :---: | :---: | :---: | :---: |
 | View dashboard, plots, devices, records | Yes | Yes | Yes | Yes |
 | Add records, edit plots, delete records | Yes | Yes | Yes | No |
+| Acknowledge, resolve, or reopen alerts | Yes | Yes | Yes | No |
 | Delete plots, manage devices and thresholds | Yes | Yes | No | No |
 | Manage team and view audit | Yes | Yes* | No | No |
 | Add or edit admins | Yes | No | No | No |
@@ -52,6 +54,14 @@ For local development, run `mysql < db/schema.sql` with an authorized MySQL acco
 4. For **Plot photo**, choose or capture an image and select **Save record**. The browser compresses the image; the API accepts an image payload of roughly 2 MB.
 5. **Farm overview** shows the latest readings, moisture trend, recent activity, photo, and alerts. The default alert thresholds are 20% low moisture and 35°C high temperature.
 
+### Work with alerts
+
+Every new manual, imported, or device reading is checked against the farm's moisture and temperature thresholds. The first violating reading opens an alert for its plot and metric. Further violating readings update its value, severity, and occurrence count. A normal reading for that metric automatically resolves the active alert. Critical severity means moisture is below half the low threshold or temperature is more than 10°C over the high threshold.
+
+Open **Alerts** or use **Manage alerts** on the dashboard. Filter by status, severity, or plot; search the fetched list; then use **Refresh** or **Export shown CSV**. Operators, admins, and owners can **Acknowledge**, **Resolve** (with an optional note), or **Reopen** an alert. Select active alerts and choose **Acknowledge selected** or **Resolve selected** for bulk action. Acknowledgment keeps the alert active. A newly violating reading can create another alert after one has been resolved. The **Edit thresholds** button takes an owner or admin to Settings & data.
+
+The alert screen refreshes every 60 seconds while visible. It fetches up to 500 alerts for a filter; search and CSV export use that fetched set. Threshold changes affect new readings and do not retroactively recalculate historical records. Existing database volumes receive the alerts table when the server starts. No external notification channel or background device-offline detector is included.
+
 ### Review and export records
 
 Open **Field records** and filter by all records, readings, or photos. **View photo** opens an image. Users with edit rights can **Delete** a record; the interface has no undo. **Export CSV** downloads the dashboard's loaded records, up to 500, regardless of the visible filter. The `/api/records` endpoint can return up to 1,000 recent tenant records.
@@ -81,7 +91,7 @@ time,plot,moisture,temperature,humidity,note
 2026-10-05T08:00:00Z,North Field,28.5,31,62,Early reading
 ```
 
-**Export JSON backup** downloads the current dashboard snapshot, including up to 500 recent records. It is not a complete database backup, and there is no JSON restore button. Back up the MySQL volume separately.
+**Export JSON backup** downloads the current dashboard snapshot, including up to 500 recent records and up to 100 active alerts. It is not a complete database backup, and there is no JSON restore button. Back up the MySQL volume separately.
 
 ### Install on a phone
 
@@ -90,6 +100,8 @@ Open the app's HTTPS address in a browser that supports PWA installation, then c
 ## API
 
 Authenticated browser routes use an HttpOnly session cookie. `GET /api/dashboard` returns tenant scoped dashboard data. `GET/POST/PUT/DELETE /api/plots`, `/api/devices`, `/api/records`, `/api/users`, and `/api/settings` serve the GUI according to role. `GET /api/audit` lists recent events. `POST /api/records/import` accepts up to 500 reading objects per request. Records are limited to the newest 500 in the dashboard and 1,000 in the log.
+
+`GET /api/alerts` supports `status` (active/open/acknowledged/resolved/all), `severity`, `plot`, and `limit` (up to 500). `POST /api/alerts/:id/acknowledge`, `/resolve`, and `/reopen` change one alert. `POST /api/alerts/bulk` accepts an `action` of `acknowledge` or `resolve` and up to 100 alert IDs. These actions require an owner, admin, or operator role and are scoped to the signed-in farm.
 
 A device sends `POST /api/ingest` with `x-device-key: <device-id>.<secret>` and JSON `{ "time": "2026-10-05T08:00:00Z", "moisture": 28.5, "temperature": 31, "humidity": 62 }`. The device must be assigned to a plot. The API key is shown once when created or rotated; only its hash is stored.
 
