@@ -4,6 +4,46 @@ Multi-tenant mobile and desktop farm monitoring app with a MySQL backend. Farms 
 
 For architecture, local development, database changes, API conventions, testing, and releases, see the [Developer Guide](docs/DEVELOPER_GUIDE.md).
 
+## Flow chart
+
+The main workflow starts with a farm account and plot. A person or assigned device then saves a reading. Threshold evaluation updates the dashboard and may open or resolve an alert.
+
+```mermaid
+flowchart TD
+    A["Create farm and sign in"] --> B["Add plot"]
+    B --> C{"Record source"}
+    C --> D["Manual reading or photo"]
+    C --> E["Device reading"]
+    D --> F["Save tenant record"]
+    E --> F
+    F --> G["Evaluate reading thresholds"]
+    G --> H["Dashboard and record log"]
+    G --> I{"Threshold crossed?"}
+    I -->|Yes| J["Open or update alert"]
+    I -->|No| K["Resolve active metric alert"]
+    J --> L["Acknowledge or resolve"]
+```
+
+Photos are saved without threshold evaluation. An alert can be reopened from the Alert center; a later violating reading can open a new alert after resolution.
+
+## System design
+
+```mermaid
+flowchart TD
+    U["Desktop or phone PWA"] -->|"Session cookie and JSON"| A["Express API"]
+    D["Assigned farm device"] -->|"Device key and reading"| A
+    A -->|"Tenant-scoped queries"| M["MySQL"]
+    A -->|"Static app assets"| U
+```
+
+The Express server serves the responsive interface and API. MySQL holds farms, users, plots, devices, records, settings, alerts, and audit events. The PWA caches app assets; it needs a network connection for API data.
+
+### Visual concept
+
+![Illustrative CAFP farm sensor and dashboard concept](dist/assets/concept.jpg)
+
+The image is a design illustration. The current repository does not include the pictured physical sensor, solar equipment, or 5G gateway firmware.
+
 ## Features
 
 | Area | Functions |
