@@ -2,6 +2,8 @@
 
 Multi-tenant mobile and desktop farm monitoring app with a MySQL backend. Farms have isolated plots, devices, records, alert settings, users and audit events.
 
+For architecture, local development, database changes, API conventions, testing, and releases, see the [Developer Guide](docs/DEVELOPER_GUIDE.md).
+
 ## Features
 
 | Area | Functions |
