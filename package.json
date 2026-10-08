@@ -1,12 +1,12 @@
 {
   "name": "cafp-farm-monitoring",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "check": "node --check server/index.js && node --check server/alerts.js && node --check dist/app.js && node --check dist/alerts.js"
+    "check": "node --check server/index.js && node --check server/alerts.js && node --check server/onboarding.js && node --check dist/app.js && node --check dist/alerts.js && node --check dist/onboarding.js && node --check dist/downloads.js"
   },
   "engines": {
     "node": ">=20"

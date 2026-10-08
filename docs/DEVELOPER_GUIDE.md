@@ -1,6 +1,6 @@
 # CAFP Developer Guide
 
-This guide describes the code in this repository at version 2.1.0. The [README](../README.md) covers product features and user steps.
+This guide describes the code in this repository at version 2.2.0. The [README](../README.md) covers product features and user steps.
 
 ## Stack and layout
 
@@ -10,8 +10,9 @@ CAFP is a single Node.js 20+ process serving an Express 4 API and static browser
 | --- | --- |
 | `server/index.js` | Express setup, authentication, role checks, tenant-scoped CRUD, device ingestion, static serving. |
 | `server/alerts.js` | Alert table initialization, reading evaluation, alert API, dashboard alert query. |
+| `server/onboarding.js` | Invitation enrollment, member registration, and profile routes. |
 | `db/schema.sql` | Initial schema for a new MySQL volume. |
-| `dist/index.html`, `dist/app.js`, `dist/alerts.js`, `dist/style.css` | Browser shell, screens and actions, alert screen, styles. |
+| `dist/index.html`, `dist/app.js`, `dist/alerts.js`, `dist/onboarding.js`, `dist/downloads.js`, `dist/style.css` | Browser shell, screens and actions, alert screen, styles. |
 | `dist/sw.js`, `dist/manifest.webmanifest` | PWA cache and install metadata. |
 | `Dockerfile`, `docker-compose.yml`, `.env.example` | Container and local configuration. |
 | `.github/workflows/check.yml` | Syntax check on pushes and pull requests. |
@@ -27,7 +28,7 @@ The browser calls `/api/*` with same-origin cookies. The server serves `dist/` a
 3. Open `http://127.0.0.1:8080` locally and register a farm. The Compose port binds to localhost unless `APP_BIND` is changed.
 4. Inspect logs with `docker compose logs -f app mysql`; stop with `docker compose down`. Do not add `-v` unless deleting the database volume is intended.
 
-The database service runs `db/schema.sql` only when its data volume is first initialized. On later starts, the app calls `ensureAlertSchema()` so the alert table can be added to an existing installation. This is not a general migration system. For any future schema change, add a versioned, idempotent migration and document the rollout; editing `schema.sql` alone does not upgrade existing volumes. The database account must have permission to create the alert table on an older volume or an administrator must apply that schema change before starting the updated app.
+The database service runs `db/schema.sql` only when its data volume is first initialized. On later starts, the app calls `ensureAlertSchema()` and `ensureOnboardingSchema()` so alert and invitation tables can be added to an existing installation. This is not a general migration system. For any future schema change, add a versioned, idempotent migration and document the rollout; editing `schema.sql` alone does not upgrade existing volumes. The database account must have permission to create these tables on an older volume or an administrator must apply that schema change before starting the updated app.
 
 ### Without Compose
 
@@ -43,7 +44,7 @@ There is no checked-in lockfile. The Dockerfile and workflow currently use `npm 
 4. Every tenant-owned query must include `req.user.tenant_id`. For a new cross-table operation, verify ownership of referenced plot/device/user IDs before writing. Do not trust a tenant ID in a request body.
 5. Devices use a separate `x-device-key: <device-id>.<secret>` header. The device row stores a hash of the secret. The device's tenant and assigned plot come from the database, never the request body.
 
-The primary tables are `tenants`, `users`, `sessions`, `plots`, `devices`, `records`, `tenant_settings`, `alerts`, and `audit_events`. UUIDs identify most rows. Records store UTC observation time in a MySQL `DATETIME`; browser-facing record data adds a `Z` suffix. Photos are stored as compressed data URLs in MySQL.
+The primary tables are `tenants`, `users`, `sessions`, `invitations`, `plots`, `devices`, `records`, `tenant_settings`, `alerts`, and `audit_events`. UUIDs identify most rows. Records store UTC observation time in a MySQL `DATETIME`; browser-facing record data adds a `Z` suffix. Photos are stored as compressed data URLs in MySQL.
 
 ## API conventions
 
@@ -52,6 +53,8 @@ The UI helper `api(url, method, body)` in `dist/app.js` calls `/api${url}`, send
 | Area | Routes | Access |
 | --- | --- | --- |
 | Authentication | `POST /api/auth/register`, `/login`, `/logout`; `GET /api/me` | Register/login public; logout/me authenticated. |
+| Invitations | `GET /api/auth/invitations/:token`; `POST /api/auth/register-member`; `GET/POST /api/invitations`; `DELETE /api/invitations/:id` | Token lookup and registration public; management owner/admin. |
+| Profile | `PUT /api/profile` | Any signed-in role; current password required for password changes. |
 | Dashboard | `GET /api/dashboard` | Any signed-in role; up to 500 records and 100 active alerts. |
 | Plots | `GET/POST /api/plots`; `PUT/DELETE /api/plots/:id` | Read all roles; add/edit owner/admin/operator; delete owner/admin. |
 | Devices | `GET/POST /api/devices`; `PUT/DELETE /api/devices/:id`; `POST /api/devices/:id/rotate-key` | Read all roles; mutations owner/admin. |
@@ -61,6 +64,8 @@ The UI helper `api(url, method, body)` in `dist/app.js` calls `/api${url}`, send
 | Device input | `POST /api/ingest` | Valid device key and an assigned plot. |
 
 The alert actions are `acknowledge`, `resolve`, and `reopen`. Bulk supports acknowledge/resolve for at most 100 IDs. `GET /api/alerts` accepts `status`, `severity`, `plot`, and `limit` (maximum 500). The record import accepts at most 500 items. The API is not versioned.
+
+An invitation stores a SHA-256 token hash and is locked during redemption so it can register one member. The link is shown once and expires in seven days; there is no email delivery. Invitation management is tenant-scoped, and an admin cannot invite another admin. A profile password change revokes other sessions.
 
 ## Alert lifecycle
 
@@ -77,11 +82,13 @@ Threshold edits affect future readings only. There is no background scheduler, e
 
 1. Add or update the schema with a migration path for both fresh and existing databases.
 2. Add a tenant-scoped API route in `server/index.js` or a focused module, with input validation, a role check, and an audit entry for meaningful changes.
-3. Add UI controls in `dist/app.js` or `dist/alerts.js`; use the `api()` helper, escape untrusted text with `esc()`, and refresh the affected view after a successful mutation. Every visible action should have a real route or a clearly identified browser-only action such as CSV download.
+3. Add UI controls in `dist/app.js`, `dist/alerts.js`, or `dist/onboarding.js`; use the `api()` helper, escape untrusted text with `esc()`, and refresh the affected view after a successful mutation. Every visible action should have a real route or a clearly identified browser-only action such as CSV download.
 4. If an asset is required offline, update the asset list and cache version in `dist/sw.js`.
 5. Update the README/user manual and this guide, then run the checks below.
 
 Avoid global tenant queries for new features. Test that a user in farm A cannot read or mutate farm B's IDs, including bulk endpoints. Validate negative values, missing fields, duplicate submissions, and role changes. Review new downloadable data for formula injection if it will be opened in spreadsheet software.
+
+The Get the app screen uses the browser `beforeinstallprompt` event when available and otherwise displays Android, iOS, and desktop instructions. The service worker caches `dist/downloads.js`; bump its cache version when changing offline assets. This repository does not build native binaries.
 
 ## Checks and release
 

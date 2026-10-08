@@ -24,3 +24,13 @@ CREATE TABLE IF NOT EXISTS alerts (
   FOREIGN KEY (plot_id) REFERENCES plots(id) ON DELETE CASCADE,
   FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE SET NULL
 );
+CREATE TABLE IF NOT EXISTS invitations (
+  id CHAR(36) PRIMARY KEY, tenant_id CHAR(36) NOT NULL,
+  email VARCHAR(255) NOT NULL, role ENUM('admin','operator','viewer') NOT NULL,
+  token_hash CHAR(64) NOT NULL UNIQUE, created_by CHAR(36) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at DATETIME NOT NULL, used_at DATETIME NULL, revoked_at DATETIME NULL,
+  KEY idx_invitation_tenant (tenant_id,created_at),
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);

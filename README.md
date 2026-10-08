@@ -80,16 +80,17 @@ The intended edge fallback uses sensor thresholds when cloud AI is disconnected.
 
 | Area | Functions |
 | --- | --- |
-| Accounts | Register a farm and owner, sign in with farm name and email, manage users in owner/admin/operator/viewer roles, sign out. |
+| Accounts | Register a farm and owner; invite a member with a one-time, seven-day registration link; sign in with farm name and email; edit your profile and password; sign out. |
 | Overview | Latest moisture and temperature, plot/device counts, soil moisture trend, recent activity, latest photo, persistent threshold alerts, manual refresh. |
 | Alert center | Tenant-scoped warning/critical alerts from new readings; acknowledge, resolve with a note, reopen, bulk actions, status/severity/plot/search filters, CSV export, and periodic refresh. |
 | Field records | Save readings or compressed plot photos with time and notes; filter, view, delete, and export records. |
 | Plots | Add, edit, and delete plots with crop and area details. |
 | Devices | Add sensor/camera/gateway devices, assign plots, edit status, rotate or revoke one-time ingest keys, view last-seen time. |
 | Settings | Set alert thresholds, import readings CSV, export JSON snapshot, review audit events. |
-| Mobile | Responsive browser interface and installable PWA; camera capture on supported devices. |
+| Navigation and mobile | Grouped Workspace, Manage, and Account navigation; Getting started shortcuts and Get the app installation page; responsive browser interface and installable PWA; camera capture on supported devices. |
 
 This is one web/PWA codebase, not separate native Android and iOS apps. Alerts are in-app; email, SMS, and push notifications are not implemented.
+Invitation links are displayed for an owner/admin to share privately; the app does not send invitation emails or verify mailbox ownership.
 
 ## Roles
 
@@ -119,6 +120,10 @@ For local development, run `mysql < db/schema.sql` with an authorized MySQL acco
 1. Open the app and choose **New farm? Create an account**. Enter farm name, your name, email, and a password of at least 12 characters. This creates the owner account.
 2. For later sign-ins, enter the exact farm name, email, and password. The same email can belong to different farms, so the farm name is required.
 3. Owners/admins add other users in **Team management**. Give each member the farm name, their email, and the assigned password. Use **Sign out** on shared devices.
+
+For member self-registration, an owner/admin opens **Team**, enters the member's email and role, and selects **Create invitation**. Copy the private link immediately and share it with that person. The invitee opens the link, checks the invitation, enters a name and password (12+ characters), and selects **Create my account**. The link expires after seven days, can be used once, and can be revoked while pending. The farm name, email, and role are fixed by the invitation. The app signs the member in after registration. Existing members use the normal farm sign-in form.
+
+Use **My profile** to update your name or password. Changing the password requires the current password and signs out other sessions. **Getting started** links to the actions available for your role. On a phone, swipe the bottom navigation horizontally to reach more pages.
 
 ### Add plots and observations
 
@@ -154,7 +159,7 @@ At least one measurement is required. The assigned plot determines where the rea
 
 ### Manage the team and thresholds
 
-In **Team management**, add a member with name, email, a password of at least 12 characters, and a role. **Edit access** changes name, role, active state, or password. Disabling a user or changing their password invalidates existing sessions. In **Settings & data**, set low moisture and high temperature and select **Save thresholds**. This screen also shows the 100 most recent audit events.
+In **Team**, create and revoke invitations, review members, and use **Edit access** to change a member's name, role, active state, or password. Disabling a user or changing their password invalidates existing sessions. Admins cannot invite or edit another admin. In **Settings & data**, set low moisture and high temperature and select **Save thresholds**. This screen also shows the 100 most recent audit events.
 
 ### Import and back up data
 
@@ -167,13 +172,15 @@ time,plot,moisture,temperature,humidity,note
 
 **Export JSON backup** downloads the current dashboard snapshot, including up to 500 recent records and up to 100 active alerts. It is not a complete database backup, and there is no JSON restore button. Back up the MySQL volume separately.
 
-### Install on a phone
+### App downloads and installation
 
-Open the app's HTTPS address in a browser that supports PWA installation, then choose **Install app** or **Add to Home Screen**. API actions and fresh data require a network connection. Camera capture depends on the phone and browser.
+Open the app's HTTPS address and select **Get the app** on the sign-in screen or under Account. **Install CAFP** opens the browser installation prompt when available; otherwise it shows platform steps. Android users can install from Chrome; iPhone/iPad users can use Safari’s Share → Add to Home Screen. **Copy app link** shares the current hosted app address. There is no APK, IPA, or app-store package in this repository. API actions and fresh data require a network connection. Camera capture depends on the phone and browser.
 
 ## API
 
 Authenticated browser routes use an HttpOnly session cookie. `GET /api/dashboard` returns tenant scoped dashboard data. `GET/POST/PUT/DELETE /api/plots`, `/api/devices`, `/api/records`, `/api/users`, and `/api/settings` serve the GUI according to role. `GET /api/audit` lists recent events. `POST /api/records/import` accepts up to 500 reading objects per request. Records are limited to the newest 500 in the dashboard and 1,000 in the log.
+
+`GET /api/auth/invitations/:token` checks a private invite; `POST /api/auth/register-member` consumes it atomically and creates a member session. `GET/POST /api/invitations` lists/creates tenant invitations; `DELETE /api/invitations/:id` revokes one. `PUT /api/profile` updates the signed-in member's name/password. The app creates the `invitations` table on startup for existing MySQL volumes.
 
 `GET /api/alerts` supports `status` (active/open/acknowledged/resolved/all), `severity`, `plot`, and `limit` (up to 500). `POST /api/alerts/:id/acknowledge`, `/resolve`, and `/reopen` change one alert. `POST /api/alerts/bulk` accepts an `action` of `acknowledge` or `resolve` and up to 100 alert IDs. These actions require an owner, admin, or operator role and are scoped to the signed-in farm.
 
