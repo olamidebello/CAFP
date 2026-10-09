@@ -97,6 +97,7 @@ function guideScreen() {
     ['Add a plot','Create a field before entering measurements.','plots'],
     ['Capture a record','Log readings or photos from the field.','capture'],
     ['Review alerts','Acknowledge and resolve threshold events.','alerts'],
+    ['Farm events','Review automation requests and gateway outcomes.','automation'],
     ['Manage devices','Assign sensors and rotate ingest keys.','devices'],
     ...(admin()?[['Invite team','Send a private, one-time registration link.','team'],['Set thresholds','Adjust moisture and temperature limits.','settings']]:[]),
     ['Update profile','Change your name or password.','profile']

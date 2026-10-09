@@ -1,6 +1,6 @@
 # CAFP Developer Guide
 
-This guide describes the code in this repository at version 2.3.0. The [README](../README.md) covers product features and user steps.
+This guide describes the code in this repository at version 2.4.0. The [README](../README.md) covers product features and user steps.
 
 ## Stack and layout
 
@@ -12,6 +12,7 @@ CAFP is a single Node.js 20+ process serving an Express 4 API and static browser
 | `server/alerts.js` | Alert table initialization, reading evaluation, alert API, dashboard alert query. |
 | `server/onboarding.js` | Invitation enrollment, member registration, and profile routes. |
 | `server/media.js`, `gateway/wyze_rtsp_feeder.py` | Tenant-scoped media API and optional RTSP snapshot/clip feeder. |
+| `server/automation.js`, `dist/automation.js`, `gateway/command_worker.py` | Farm rules, event approval and queue, GUI, and gateway worker. |
 | `db/schema.sql` | Initial schema for a new MySQL volume. |
 | `dist/index.html`, `dist/app.js`, `dist/alerts.js`, `dist/onboarding.js`, `dist/downloads.js`, `dist/media.js`, `dist/style.css` | Browser shell, screens and actions, alert screen, styles. |
 | `dist/sw.js`, `dist/manifest.webmanifest` | PWA cache and install metadata. |
@@ -29,7 +30,7 @@ The browser calls `/api/*` with same-origin cookies. The server serves `dist/` a
 3. Open `http://127.0.0.1:8080` locally and register a farm. The Compose port binds to localhost unless `APP_BIND` is changed.
 4. Inspect logs with `docker compose logs -f app mysql`; stop with `docker compose down`. Do not add `-v` unless deleting the database volume is intended.
 
-The database service runs `db/schema.sql` only when its data volume is first initialized. On later starts, the app calls `ensureAlertSchema()` and `ensureOnboardingSchema()` so alert, invitation, and media tables can be added to an existing installation. This is not a general migration system. For any future schema change, add a versioned, idempotent migration and document the rollout; editing `schema.sql` alone does not upgrade existing volumes. The database account must have permission to create these tables on an older volume or an administrator must apply that schema change before starting the updated app.
+The database service runs `db/schema.sql` only when its data volume is first initialized. On later starts, the app calls `ensureAlertSchema()` and `ensureOnboardingSchema()` so alert, invitation, media, and automation tables can be added to an existing installation. This is not a general migration system. For any future schema change, add a versioned, idempotent migration and document the rollout; editing `schema.sql` alone does not upgrade existing volumes. The database account must have permission to create these tables on an older volume or an administrator must apply that schema change before starting the updated app.
 
 ### Without Compose
 
@@ -45,7 +46,7 @@ There is no checked-in lockfile. The Dockerfile and workflow currently use `npm 
 4. Every tenant-owned query must include `req.user.tenant_id`. For a new cross-table operation, verify ownership of referenced plot/device/user IDs before writing. Do not trust a tenant ID in a request body.
 5. Devices use a separate `x-device-key: <device-id>.<secret>` header. The device row stores a hash of the secret. The device's tenant and assigned plot come from the database, never the request body.
 
-The primary tables are `tenants`, `users`, `sessions`, `invitations`, `media_assets`, `plots`, `devices`, `records`, `tenant_settings`, `alerts`, and `audit_events`. UUIDs identify most rows. Records store UTC observation time in a MySQL `DATETIME`; browser-facing record data adds a `Z` suffix. Photos are stored as compressed data URLs in MySQL.
+The primary tables are `tenants`, `users`, `sessions`, `invitations`, `media_assets`, `automation_rules`, `farm_events`, `plots`, `devices`, `records`, `tenant_settings`, `alerts`, and `audit_events`. UUIDs identify most rows. Records store UTC observation time in a MySQL `DATETIME`; browser-facing record data adds a `Z` suffix. Photos are stored as compressed data URLs in MySQL.
 
 ## API conventions
 
@@ -62,6 +63,7 @@ The UI helper `api(url, method, body)` in `dist/app.js` calls `/api${url}`, send
 | Records | `GET/POST /api/records`; `DELETE /api/records/:id`; `POST /api/records/import` | Read all roles; mutations owner/admin/operator. |
 | Alerts | `GET /api/alerts`; `POST /api/alerts/:id/:action`; `POST /api/alerts/bulk` | Read all roles; actions owner/admin/operator. |
 | Settings/team/audit | `GET/PUT /api/settings`, `GET/POST /api/users`, `PUT /api/users/:id`, `GET /api/audit` | Settings read all roles, write owner/admin; team/audit owner/admin. |
+| Automation | `GET/POST /api/automation/rules`, `PUT/DELETE /api/automation/rules/:id`, `GET/POST /api/automation/events`, approval/cancel; gateway signal/poll/ack | Tenant scoped; rules and approvals owner/admin; device routes use gateway key. |
 | Media | `GET/POST /api/media`; `GET/DELETE /api/media/:id`; `POST /api/media/device` | Farm list/read, owner/admin/operator upload, owner/admin delete; device upload with camera/gateway key. |
 | Device input | `POST /api/ingest` | Valid device key and an assigned plot. |
 
@@ -70,6 +72,12 @@ The alert actions are `acknowledge`, `resolve`, and `reopen`. Bulk supports ackn
 An invitation stores a SHA-256 token hash and is locked during redemption so it can register one member. The link is shown once and expires in seven days; there is no email delivery. Invitation management is tenant-scoped, and an admin cannot invite another admin. A profile password change revokes other sessions.
 
 Media payloads are stored as MySQL `LONGBLOB` values, capped at 8 MB per upload; the media table is created on startup for existing volumes. User uploads validate plot ownership. Device uploads resolve tenant and plot from the key and accept only camera/gateway devices; no client-supplied tenant ID is trusted. The feeder invokes local `ffmpeg` with a configured RTSP URL and sends bounded JPEG/MP4 captures over HTTPS. There is no direct Wyze cloud API integration, live stream proxy, or video inference. Add upload rate limits, retention, and external object storage before scaling video use.
+
+## Automation command lifecycle
+
+Readings call `evaluateSignal()` after insertion and threshold alert evaluation. A rule row is locked while checking its cooldown and creating an event. Camera events arrive only through an authenticated gateway key. Manual actions create pending requests. Only irrigation rules explicitly marked for automatic dispatch enter the queue without approval. Gateway poll atomically claims one queued event; acknowledgments must come from that same gateway. There is deliberately no automatic retry after claim. Claims without an acknowledgment need operational review.
+
+The worker requires explicit enablement and site-supplied executable adapters. Each adapter must independently enforce plot/equipment mapping, maximum run time, safe operating conditions, an emergency stop, and command-ID idempotency. `launch_drone` also requires local gateway arming. CAFP only queues and audits requests; no drone navigation or physical actuator driver is bundled. Event evaluation errors after a reading are logged while the reading remains saved. Production deployment needs a durable evaluation outbox and database integration tests.
 
 ## Alert lifecycle
 
@@ -98,6 +106,7 @@ The Get the app screen uses the browser `beforeinstallprompt` event when availab
 
 ```sh
 npm run check
+npm test
 docker compose config
 docker compose up -d --build
 docker compose logs --tail=100 app mysql

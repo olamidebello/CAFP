@@ -90,6 +90,7 @@ The design image is generated with `python3 tools/render_architecture.py` using 
 | Plots | Add, edit, and delete plots with crop and area details. |
 | Devices | Add sensor/camera/gateway devices, assign plots, edit status, rotate or revoke one-time ingest keys, view last-seen time. |
 | Camera media | Upload Wyze-exported photos/MP4 clips, browse and download tenant-scoped media, delete media as owner/admin, or feed captures from an existing RTSP stream. |
+| Farm events | Create sensor or camera rules, request manual actions, approve or cancel queued actions, and track gateway results for irrigation, drone-house opening, and drone launch. |
 | Settings | Set alert thresholds, import readings CSV, export JSON snapshot, review audit events. |
 | Navigation and mobile | Grouped Workspace, Manage, and Account navigation; Getting started shortcuts and Get the app installation page; responsive browser interface and installable PWA; camera capture on supported devices. |
 
@@ -165,9 +166,22 @@ At least one measurement is required. The assigned plot determines where the rea
 
 1. Create a plot, then create a **camera** (or **gateway**) device assigned to that plot in **Devices**. Save the one-time device key securely.
 2. With stock firmware, use the Wyze app to download a photo or event video to your phone. Open **Camera media**, choose that plot and a JPEG, PNG, or MP4 file, and select **Upload media**. Any owner, admin, or operator can upload; owners/admins can delete. The gallery has playback, download, and refresh controls. Each file is limited to 8 MB. These uploads are separate from threshold reading records.
-3. If your Cam v3 *already* exposes a local RTSP URL, install `ffmpeg` and Python 3 on a gateway on the same camera network. Set `WYZE_RTSP_URL`, `CAFP_URL` (HTTPS), and `CAFP_DEVICE_KEY` as protected environment variables, then run `python3 gateway/wyze_rtsp_feeder.py --once` to test a snapshot. For ongoing captures, run without `--once` (default: every five minutes). Add `--clip-seconds 10` to upload a short MP4 with each snapshot. Use a service manager for continuous operation. Do not expose RTSP to the public internet.
+3. If your Cam v3 *already* exposes a local RTSP URL, install `ffmpeg` and Python 3 on a gateway on the same camera network. Set `WYZE_RTSP_URL`, `CAFP_URL` (HTTPS), and `CAFP_DEVICE_KEY` as protected environment variables, then run `python3 gateway/wyze_rtsp_feeder.py --once` to test a snapshot. For ongoing captures, run without `--once` (default: every five minutes). Add `--clip-seconds 10` to upload a short MP4 with each snapshot. Install Pillow and add `--motion-threshold 0.15` to compare successive snapshots and report camera motion to the automation engine. Motion difference is not intrusion detection. Use a service manager for continuous operation. Do not expose RTSP to the public internet.
 
 Wyze says its Cam v3 RTSP firmware downloads have been removed while it reviews support, so a stock camera cannot be assumed to have an RTSP URL. CAFP does not flash firmware or call an undocumented Wyze cloud API. The feeder needs an already working stream; manual export/upload works without RTSP. This version stores media bytes in MySQL for simple installation. Plan storage capacity and backups accordingly. There is no live browser stream or object detection in this release.
+
+### Farm events and equipment control
+
+The **Farm events** screen connects field data to an auditable gateway command queue:
+
+1. Assign a **gateway** device to each plot with equipment control. Keep its one-time key on the gateway only. Create a rule as an owner/admin: select plot, gateway, signal, action, and cooldown. Moisture triggers when **below** the rule threshold; temperature triggers when **above** it. Camera motion comes from the optional snapshot difference feeder; `camera_intrusion` can be sent by a separate authenticated analysis service. No intrusion AI is included here.
+2. Select **Request action** to propose irrigation (1–300 seconds), opening the drone house, or launching the drone. Manual requests await owner/admin approval. A manual drone request requires a *different* owner/admin to approve it.
+3. Automatic rules normally create a pending approval event. Only an owner/admin can opt to auto-queue **irrigation**; drone-house and drone actions always need approval. Repeated signals within the rule's cooldown do not create another command. Pause/enable or delete rules from the same screen.
+4. The gateway worker polls `POST /api/automation/gateway/poll`, receives one queued command, runs a site-specific adapter, then acknowledges success/failure at `POST /api/automation/gateway/:id/ack`. The screen shows pending, queued, claimed, succeeded, failed, and cancelled states. A command is **not retried automatically** after claim, to avoid duplicate physical operation. Investigate any claimed command that has no acknowledgment.
+
+`gateway/command_worker.py` is the queue client, not a ready-made relay or drone controller. Set `CAFP_URL` to the HTTPS server and `CAFP_DEVICE_KEY` to an assigned gateway key. Provide executable absolute paths in `IRRIGATION_ADAPTER`, `DRONE_HOUSE_ADAPTER`, and `DRONE_LAUNCH_ADAPTER`. Each adapter receives the unique command ID and duration seconds as arguments, must enforce local interlocks and idempotency, and exits zero only after confirming the physical action. Run `python3 gateway/command_worker.py --enable-actuators` only after testing the site's hardware and emergency stop. Drone launch additionally requires `DRONE_ARMED=true` on the gateway. Without a configured executable adapter, the worker reports failure. CAFP does not pilot, navigate, or land a drone.
+
+An authenticated gateway may send `POST /api/automation/device-event` with its `x-device-key` and JSON `{"signal":"camera_motion","detail":"motion score 0.2"}` or `camera_intrusion`. The feeder can generate `camera_motion`; intrusion requires an external detector. The camera signal is scoped to the gateway's assigned tenant and plot. No raw camera credentials or actuator endpoints are exposed to browser users.
 
 ### Manage the team and thresholds
 
@@ -191,6 +205,8 @@ Open the app's HTTPS address and select **Get the app** on the sign-in screen or
 ## API
 
 Authenticated browser routes use an HttpOnly session cookie. `GET /api/dashboard` returns tenant scoped dashboard data. `GET/POST/PUT/DELETE /api/plots`, `/api/devices`, `/api/records`, `/api/users`, and `/api/settings` serve the GUI according to role. `GET /api/audit` lists recent events. `POST /api/records/import` accepts up to 500 reading objects per request. Records are limited to the newest 500 in the dashboard and 1,000 in the log.
+
+`GET/POST /api/automation/rules` and `PUT/DELETE /api/automation/rules/:id` manage tenant rules; `GET/POST /api/automation/events` lists and requests events; `/approve` and `/cancel` change pending commands. Gateway-key routes are `POST /api/automation/device-event`, `/api/automation/gateway/poll`, and `/api/automation/gateway/:id/ack`.
 
 `GET /api/media` lists the latest 100 farm media items; `POST /api/media?plot=<id>` uploads a signed-in user’s JPEG/PNG/MP4; `GET /api/media/:id` serves or downloads a tenant-scoped asset; owners/admins can `DELETE /api/media/:id`. A provisioned camera or gateway uploads binary media to `POST /api/media/device` with its `x-device-key` and `Content-Type`; its assigned plot fixes the tenant and plot. Uploads are capped at 8 MB.
 

@@ -47,3 +47,37 @@ CREATE TABLE IF NOT EXISTS media_assets (
   FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE SET NULL,
   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 );
+CREATE TABLE IF NOT EXISTS automation_rules (
+  id CHAR(36) PRIMARY KEY,tenant_id CHAR(36) NOT NULL,plot_id CHAR(36) NOT NULL,
+  gateway_id CHAR(36) NOT NULL,name VARCHAR(160) NOT NULL,
+  signal ENUM('low_moisture','high_temperature','camera_motion','camera_intrusion') NOT NULL,
+  threshold DECIMAL(7,2) NULL,
+  action ENUM('irrigation','open_drone_house','launch_drone') NOT NULL,
+  duration_seconds SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  auto_dispatch BOOLEAN NOT NULL DEFAULT FALSE,enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  cooldown_minutes SMALLINT UNSIGNED NOT NULL DEFAULT 15,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_rule_signal (tenant_id,plot_id,signal,enabled),
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+  FOREIGN KEY (plot_id) REFERENCES plots(id),
+  FOREIGN KEY (gateway_id) REFERENCES devices(id)
+);
+CREATE TABLE IF NOT EXISTS farm_events (
+  id CHAR(36) PRIMARY KEY,tenant_id CHAR(36) NOT NULL,plot_id CHAR(36) NOT NULL,
+  gateway_id CHAR(36) NOT NULL,rule_id CHAR(36) NULL,requested_by CHAR(36) NULL,
+  approved_by CHAR(36) NULL,source ENUM('manual','sensor','camera') NOT NULL,
+  signal VARCHAR(40) NOT NULL,action ENUM('irrigation','open_drone_house','launch_drone') NOT NULL,
+  duration_seconds SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  status ENUM('pending_approval','queued','claimed','succeeded','failed','cancelled') NOT NULL,
+  detail VARCHAR(500) NOT NULL DEFAULT '',result_note VARCHAR(500) NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  approved_at DATETIME NULL,claimed_at DATETIME NULL,finished_at DATETIME NULL,
+  KEY idx_event_tenant (tenant_id,created_at),KEY idx_gateway_queue (gateway_id,status,created_at),
+  KEY idx_event_rule (rule_id,created_at),
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+  FOREIGN KEY (plot_id) REFERENCES plots(id),
+  FOREIGN KEY (gateway_id) REFERENCES devices(id),
+  FOREIGN KEY (rule_id) REFERENCES automation_rules(id) ON DELETE SET NULL,
+  FOREIGN KEY (requested_by) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL
+);
