@@ -1,6 +1,6 @@
 # CAFP Developer Guide
 
-This guide describes the code in this repository at version 2.4.0. The [README](../README.md) covers product features and user steps.
+This guide describes the code in this repository at version 2.4.0. The [README](../README.md) summarizes the product. The [User Guide](USER_GUIDE.md) gives step-by-step operator instructions.
 
 ## Stack and layout
 
@@ -14,6 +14,7 @@ CAFP is a single Node.js 20+ process serving an Express 4 API and static browser
 | `server/media.js`, `gateway/wyze_rtsp_feeder.py` | Tenant-scoped media API and optional RTSP snapshot/clip feeder. |
 | `server/automation.js`, `dist/automation.js`, `gateway/command_worker.py` | Farm rules, event approval and queue, GUI, and gateway worker. |
 | `db/schema.sql` | Initial schema for a new MySQL volume. |
+| `docs/USER_GUIDE.md` | Browser workflows, role actions, and troubleshooting. |
 | `dist/index.html`, `dist/app.js`, `dist/alerts.js`, `dist/onboarding.js`, `dist/downloads.js`, `dist/media.js`, `dist/style.css` | Browser shell, screens and actions, alert screen, styles. |
 | `dist/sw.js`, `dist/manifest.webmanifest` | PWA cache and install metadata. |
 | `Dockerfile`, `docker-compose.yml`, `.env.example` | Container and local configuration. |
@@ -30,7 +31,7 @@ The browser calls `/api/*` with same-origin cookies. The server serves `dist/` a
 3. Open `http://127.0.0.1:8080` locally and register a farm. The Compose port binds to localhost unless `APP_BIND` is changed.
 4. Inspect logs with `docker compose logs -f app mysql`; stop with `docker compose down`. Do not add `-v` unless deleting the database volume is intended.
 
-The database service runs `db/schema.sql` only when its data volume is first initialized. On later starts, the app calls `ensureAlertSchema()` and `ensureOnboardingSchema()` so alert, invitation, media, and automation tables can be added to an existing installation. This is not a general migration system. For any future schema change, add a versioned, idempotent migration and document the rollout; editing `schema.sql` alone does not upgrade existing volumes. The database account must have permission to create these tables on an older volume or an administrator must apply that schema change before starting the updated app.
+The database service runs `db/schema.sql` only when its data volume is first initialized. On later starts, the app calls `ensureAlertSchema()`, `ensureOnboardingSchema()`, `ensureMediaSchema()`, and `ensureAutomationSchema()` so alert, invitation, media, and automation tables can be added to an existing installation. This is not a general migration system. For any future schema change, add a versioned, idempotent migration and document the rollout; editing `schema.sql` alone does not upgrade existing volumes. The database account must have permission to create these tables on an older volume or an administrator must apply that schema change before starting the updated app.
 
 ### Without Compose
 
@@ -79,6 +80,53 @@ Readings call `evaluateSignal()` after insertion and threshold alert evaluation.
 
 The worker requires explicit enablement and site-supplied executable adapters. Each adapter must independently enforce plot/equipment mapping, maximum run time, safe operating conditions, an emergency stop, and command-ID idempotency. `launch_drone` also requires local gateway arming. CAFP only queues and audits requests; no drone navigation or physical actuator driver is bundled. Event evaluation errors after a reading are logged while the reading remains saved. Production deployment needs a durable evaluation outbox and database integration tests.
 
+### Tables and ownership
+
+| Table | Tenant binding and purpose | Retention concern |
+| --- | --- | --- |
+| `devices` | `tenant_id`, optional `plot_id`, hashed key, kind and last-seen state. | Rotated keys invalidate old feeders. |
+| `media_assets` | `tenant_id`, required plot, optional device/creator, MIME, captured time and binary payload. | 8 MB upload limit; MySQL volume and backups grow with clips. |
+| `automation_rules` | `tenant_id`, plot, assigned gateway, signal, action, threshold, duration, cooldown, enabled and auto-dispatch setting. | Gateway and plot references prevent deletion while linked. |
+| `farm_events` | `tenant_id`, plot, gateway, optional rule/requester/approver, signal, action, status, timestamps and result note. | History persists after a rule is deleted; no automatic purge. |
+
+A gateway can access only commands targeted to its own `devices.id` and assigned plot. Browser queries constrain rows by the authenticated user's `tenant_id`. The gateway resolves tenant and plot from its hashed device key; neither can be selected by an untrusted request body. API access is not a substitute for independent adapter-level mapping of a command to its physical plot.
+
+### Gateway and camera protocol
+
+Provision a `gateway` kind device on the plot and copy its one-time key. Configure `CAFP_URL=https://<your-host>` and `CAFP_DEVICE_KEY=<device-id>.<secret>` in the gateway service environment, with access limited to its service account. Use separate gateway devices and keys for separate plots. The RTSP feeder additionally needs `WYZE_RTSP_URL`; optional snapshot motion comparison needs Pillow. Do not put these values in Git, browser code, or command-line arguments that may be logged.
+
+The worker uses the following JSON protocol over HTTPS:
+
+| Request | Body | Result |
+| --- | --- | --- |
+| `POST /api/automation/gateway/poll` with `x-device-key` | `{}` | `{ "command": null }` or a command containing `id`, `action`, `duration_seconds`, `plot_id`, and `detail`. Poll atomically changes queued → claimed. |
+| `POST /api/automation/gateway/:id/ack` with the same key | `{ "status": "succeeded", "note": "Relay confirmed" }` or `failed` | Claimed → succeeded/failed. Another gateway cannot acknowledge it. |
+| `POST /api/automation/device-event` with a gateway key | `{ "signal": "camera_motion", "detail": "Image difference 0.2" }` | Evaluates matching rules for that gateway's assigned plot. `camera_intrusion` requires an external analyzer. |
+
+The Python worker passes command ID and duration seconds to a local executable configured by `IRRIGATION_ADAPTER`, `DRONE_HOUSE_ADAPTER`, or `DRONE_LAUNCH_ADAPTER`. It must be an absolute executable path; there is no shell interpolation. A zero exit code acknowledges success and other exits acknowledge failure. Start with `--enable-actuators` only after local testing; `DRONE_ARMED=true` is an additional gate for drone launch. The worker has no built-in GPIO, pump, door, or drone driver.
+
+The command lifecycle is one-way after claim: a gateway crash may leave a command claimed without an acknowledgment. Do not replay blindly. Check the physical equipment, then decide whether a new command is appropriate. If a gateway is reassigned to another plot, old queued commands are not delivered. Cancellation succeeds only before claim.
+
+### API examples
+
+A gateway can report a camera event with its key:
+
+```sh
+curl --fail-with-body -X POST "$CAFP_URL/api/automation/device-event" \
+  -H "x-device-key: $CAFP_DEVICE_KEY" -H 'Content-Type: application/json' \
+  --data '{"signal":"camera_motion","detail":"Image difference 0.20"}'
+```
+
+A provisioned sensor can send a reading with its own key:
+
+```sh
+curl --fail-with-body -X POST "$CAFP_URL/api/ingest" \
+  -H "x-device-key: $CAFP_SENSOR_KEY" -H 'Content-Type: application/json' \
+  --data '{"time":"2026-10-09T15:00:00Z","moisture":18.5,"temperature":31}'
+```
+
+Both operations use the assigned plot. The reading is saved before rule evaluation; an evaluation error is logged and does not remove the reading. For reliability under failure or high volume, add a durable outbox and an idempotent evaluation worker. Camera signals are reports from a trusted gateway, not proof of an intrusion.
+
 ## Alert lifecycle
 
 `insertRecord()` writes a reading, then calls `syncReadingAlerts()`. That function locks the plot row in a transaction to serialize concurrent alert evaluation for a plot. It compares supplied moisture and temperature values to the tenant thresholds:
@@ -94,7 +142,7 @@ Threshold edits affect future readings only. There is no background scheduler, e
 
 1. Add or update the schema with a migration path for both fresh and existing databases.
 2. Add a tenant-scoped API route in `server/index.js` or a focused module, with input validation, a role check, and an audit entry for meaningful changes.
-3. Add UI controls in `dist/app.js`, `dist/alerts.js`, or `dist/onboarding.js`; use the `api()` helper, escape untrusted text with `esc()`, and refresh the affected view after a successful mutation. Every visible action should have a real route or a clearly identified browser-only action such as CSV download.
+3. Add UI controls in `dist/app.js` or the corresponding focused browser module; use the `api()` helper, escape untrusted text with `esc()`, and refresh the affected view after a successful mutation. Every visible action should have a real route or a clearly identified browser-only action such as CSV download.
 4. If an asset is required offline, update the asset list and cache version in `dist/sw.js`.
 5. Update the README/user manual and this guide, then run the checks below.
 
@@ -112,6 +160,6 @@ docker compose up -d --build
 docker compose logs --tail=100 app mysql
 ```
 
-The first command is the current CI gate. The others require Docker. There is no automated database integration suite yet. Before a production release, exercise registration, cross-tenant access, each role, manual and device readings, alert transitions, CSV import, and mobile navigation against a disposable MySQL database. Confirm `COOKIE_SECURE=true` behind HTTPS, run a database backup, and apply migrations before replacing the app container. GitHub Actions does not deploy the service.
+`npm run check` is the current CI gate; `npm test` is the local rule test. The Compose commands require Docker. There is no automated database integration suite yet. Before a production release, exercise registration, cross-tenant access, each role, manual and device readings, alert transitions, CSV import, media upload/playback, rule thresholds and cooldown, approval races, gateway poll/ack, and mobile navigation against a disposable MySQL database. Test physical adapters with disconnected actuators before commissioning. Confirm `COOKIE_SECURE=true` behind HTTPS, run a database backup, and apply migrations before replacing the app container. GitHub Actions does not deploy the service.
 
 For production, add rate limiting, routine database backups and restore drills, monitoring, and a reverse proxy with HTTPS. Open registration is enabled in the current code; restrict it if private enrollment is required. Never commit `.env` or device keys.

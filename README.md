@@ -2,7 +2,7 @@
 
 Multi-tenant mobile and desktop farm monitoring app with a MySQL backend. Farms have isolated plots, devices, records, alert settings, users and audit events.
 
-For architecture, local development, database changes, API conventions, testing, and releases, see the [Developer Guide](docs/DEVELOPER_GUIDE.md).
+For step-by-step use, see the [User Guide](docs/USER_GUIDE.md). For architecture, local development, database changes, API conventions, testing, and releases, see the [Developer Guide](docs/DEVELOPER_GUIDE.md).
 
 ## Flow chart
 
@@ -119,6 +119,8 @@ Invitation links are displayed for an owner/admin to share privately; the app do
 For local development, run `mysql < db/schema.sql` with an authorized MySQL account, set the environment variables, then run `npm install && npm start`.
 
 ## User manual
+
+The [full User Guide](docs/USER_GUIDE.md) includes roles, camera setup, farm event status, and troubleshooting.
 
 ### Create a farm and sign in
 
