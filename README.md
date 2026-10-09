@@ -46,7 +46,7 @@ The image is a design illustration. The current repository does not include the 
 
 ### Farm device data flow (proposed)
 
-This is the operating sequence described in the supplied blueprint. It is a **design target**. The existing server accepts authenticated JSON readings and runs threshold alerts, but no ESP32, camera, gateway, video analysis, or edge firmware is included in this repository.
+This is the operating sequence described in the supplied blueprint. It is a **design target**. The server accepts authenticated JSON readings and now stores camera snapshots and short MP4 clips. ESP32 firmware, video AI, and edge warning firmware are not included.
 
 ```mermaid
 flowchart TD
@@ -64,8 +64,8 @@ flowchart TD
 
 1. **Sense:** Soil and air sensors measure field conditions. The camera can capture visual evidence independently.
 2. **Buffer and check locally:** The ESP32 samples sensor values, keeps a short local queue, and compares readings against local thresholds. During an outage, a local indicator could warn staff. Neither buffering nor local warnings are implemented yet.
-3. **Connect:** A gateway or router carries sensor readings and optional camera data over the farm's network. The current `/api/ingest` endpoint accepts JSON readings with a device key, but does not accept video.
-4. **Validate and analyze:** The current server validates measurement ranges, associates a provisioned device with its assigned plot, stores a record, and evaluates moisture and temperature thresholds. Time alignment, computer vision, XGBoost, and CARUP coordination are proposed additions.
+3. **Connect:** A gateway or router carries sensor readings and optional camera data over the farm's network. `/api/ingest` accepts JSON readings with a device key; `/api/media/device` accepts JPEG, PNG, and MP4 captures using a camera or gateway key.
+4. **Validate and analyze:** The server validates measurement ranges, associates a provisioned device with its assigned plot, stores readings and separate media assets, and evaluates moisture and temperature thresholds. Time alignment, computer vision, XGBoost, and CARUP coordination are proposed additions.
 5. **Alert and review:** The current alert database and dashboard show threshold events. Authorized users can acknowledge, resolve, or reopen them. Cloud-to-gateway settings and acknowledgments are not implemented.
 
 ![Python-rendered proposed farm-device and cloud pipeline](docs/farm-device-cloud-design.png)
@@ -74,10 +74,10 @@ The design image is generated with `python3 tools/render_architecture.py` using 
 
 | Layer | Running now | Planned in the blueprint |
 | --- | --- | --- |
-| Farm devices | Provisioned device inventory and a JSON ingest key. | ESP32 sampling and buffering, camera, gateway, local warning. |
-| Cloud input | Range validation and device-to-plot assignment. | Video intake, time alignment, and quality checks. |
+| Farm devices | Provisioned device inventory, JSON ingest key, and optional RTSP feeder for existing streams. | ESP32 sampling and buffering, camera, gateway, local warning. |
+| Cloud input | Range validation, device-to-plot assignment, bounded photo/MP4 intake. | Video intake, time alignment, and quality checks. |
 | Analysis | Tenant-specific moisture and temperature thresholds. | SSDlite/ByteTrack intrusion events, XGBoost risk models, crop context, and CARUP action selection. |
-| Results | MySQL records, alerts, acknowledgments, and dashboard. | Expiring settings and acknowledgments sent to the gateway. |
+| Results | MySQL records, camera gallery, alerts, acknowledgments, and dashboard. | Expiring settings and acknowledgments sent to the gateway. |
 
 ## Features
 
@@ -89,6 +89,7 @@ The design image is generated with `python3 tools/render_architecture.py` using 
 | Field records | Save readings or compressed plot photos with time and notes; filter, view, delete, and export records. |
 | Plots | Add, edit, and delete plots with crop and area details. |
 | Devices | Add sensor/camera/gateway devices, assign plots, edit status, rotate or revoke one-time ingest keys, view last-seen time. |
+| Camera media | Upload Wyze-exported photos/MP4 clips, browse and download tenant-scoped media, delete media as owner/admin, or feed captures from an existing RTSP stream. |
 | Settings | Set alert thresholds, import readings CSV, export JSON snapshot, review audit events. |
 | Navigation and mobile | Grouped Workspace, Manage, and Account navigation; Getting started shortcuts and Get the app installation page; responsive browser interface and installable PWA; camera capture on supported devices. |
 
@@ -160,6 +161,14 @@ Send `POST /api/ingest` with the header `x-device-key: <device-id>.<secret>` and
 
 At least one measurement is required. The assigned plot determines where the reading is stored. Successful ingestion updates the device's last-seen time and online status. Store keys securely; the server stores their hashes.
 
+### Wyze Cam v3 pictures and video
+
+1. Create a plot, then create a **camera** (or **gateway**) device assigned to that plot in **Devices**. Save the one-time device key securely.
+2. With stock firmware, use the Wyze app to download a photo or event video to your phone. Open **Camera media**, choose that plot and a JPEG, PNG, or MP4 file, and select **Upload media**. Any owner, admin, or operator can upload; owners/admins can delete. The gallery has playback, download, and refresh controls. Each file is limited to 8 MB. These uploads are separate from threshold reading records.
+3. If your Cam v3 *already* exposes a local RTSP URL, install `ffmpeg` and Python 3 on a gateway on the same camera network. Set `WYZE_RTSP_URL`, `CAFP_URL` (HTTPS), and `CAFP_DEVICE_KEY` as protected environment variables, then run `python3 gateway/wyze_rtsp_feeder.py --once` to test a snapshot. For ongoing captures, run without `--once` (default: every five minutes). Add `--clip-seconds 10` to upload a short MP4 with each snapshot. Use a service manager for continuous operation. Do not expose RTSP to the public internet.
+
+Wyze says its Cam v3 RTSP firmware downloads have been removed while it reviews support, so a stock camera cannot be assumed to have an RTSP URL. CAFP does not flash firmware or call an undocumented Wyze cloud API. The feeder needs an already working stream; manual export/upload works without RTSP. This version stores media bytes in MySQL for simple installation. Plan storage capacity and backups accordingly. There is no live browser stream or object detection in this release.
+
 ### Manage the team and thresholds
 
 In **Team**, create and revoke invitations, review members, and use **Edit access** to change a member's name, role, active state, or password. Disabling a user or changing their password invalidates existing sessions. Admins cannot invite or edit another admin. In **Settings & data**, set low moisture and high temperature and select **Save thresholds**. This screen also shows the 100 most recent audit events.
@@ -182,6 +191,8 @@ Open the app's HTTPS address and select **Get the app** on the sign-in screen or
 ## API
 
 Authenticated browser routes use an HttpOnly session cookie. `GET /api/dashboard` returns tenant scoped dashboard data. `GET/POST/PUT/DELETE /api/plots`, `/api/devices`, `/api/records`, `/api/users`, and `/api/settings` serve the GUI according to role. `GET /api/audit` lists recent events. `POST /api/records/import` accepts up to 500 reading objects per request. Records are limited to the newest 500 in the dashboard and 1,000 in the log.
+
+`GET /api/media` lists the latest 100 farm media items; `POST /api/media?plot=<id>` uploads a signed-in user’s JPEG/PNG/MP4; `GET /api/media/:id` serves or downloads a tenant-scoped asset; owners/admins can `DELETE /api/media/:id`. A provisioned camera or gateway uploads binary media to `POST /api/media/device` with its `x-device-key` and `Content-Type`; its assigned plot fixes the tenant and plot. Uploads are capped at 8 MB.
 
 `GET /api/auth/invitations/:token` checks a private invite; `POST /api/auth/register-member` consumes it atomically and creates a member session. `GET/POST /api/invitations` lists/creates tenant invitations; `DELETE /api/invitations/:id` revokes one. `PUT /api/profile` updates the signed-in member's name/password. The app creates the `invitations` table on startup for existing MySQL volumes.
 

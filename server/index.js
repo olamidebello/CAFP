@@ -5,6 +5,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {ensureAlertSchema, syncReadingAlerts, installAlertRoutes, dashboardAlerts} from './alerts.js';
 import {ensureOnboardingSchema, installOnboardingRoutes} from './onboarding.js';
+import {ensureMediaSchema, installMediaRoutes} from './media.js';
 
 const app=express(),pool=mysql.createPool({host:process.env.MYSQL_HOST||'127.0.0.1',port:Number(process.env.MYSQL_PORT||3306),user:process.env.MYSQL_USER||'cafp',password:process.env.MYSQL_PASSWORD||'',database:process.env.MYSQL_DATABASE||'cafp',waitForConnections:true,connectionLimit:10,dateStrings:true});
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../dist');
@@ -55,7 +56,8 @@ app.get('/api/audit',auth,requireRole('owner','admin'),async(req,res,next)=>{try
 app.post('/api/ingest',async(req,res,next)=>{try{let token=req.get('x-device-key')||'', [deviceId,secret]=token.split('.');if(!id(deviceId)||!secret)return fail(res,401,'Device key required');let d=(await query('SELECT * FROM devices WHERE id=?',[deviceId]))[0];if(!d||!timingSafeEqual(Buffer.from(hash(secret)),Buffer.from(d.api_key_hash)))return fail(res,401,'Invalid device key');let key=await insertRecord({tenant_id:d.tenant_id,id:null},{...req.body,plot:d.plot_id,type:'reading'},'IoT device',d.id);await query("UPDATE devices SET last_seen_at=NOW(),status='online' WHERE id=?",[d.id]);res.status(201).json({id:key})}catch(e){next(e)}});
 installAlertRoutes(app,pool,auth,requireRole,audit);
 installOnboardingRoutes(app,pool,{auth,requireRole,audit,passwordHash,checkPassword,setCookie});
+installMediaRoutes(app,pool,{auth,requireRole,audit});
 app.use('/api',(req,res)=>fail(res,404,'API route not found'));
 app.use(express.static(root,{index:'index.html'}));app.get('*',(req,res)=>res.sendFile(path.join(root,'index.html')));
 app.use((err,req,res,next)=>{console.error(err);if(err.code==='ER_DUP_ENTRY')return fail(res,409,'A record with this value already exists');fail(res,err.status||500,err.status?err.message:'Server error')});
-Promise.all([ensureAlertSchema(pool),ensureOnboardingSchema(pool)]).then(()=>app.listen(Number(process.env.PORT||8080),()=>console.log(`CAFP listening on ${process.env.PORT||8080}`))).catch(error=>{console.error('Database initialization failed',error);process.exit(1)});
+Promise.all([ensureAlertSchema(pool),ensureOnboardingSchema(pool),ensureMediaSchema(pool)]).then(()=>app.listen(Number(process.env.PORT||8080),()=>console.log(`CAFP listening on ${process.env.PORT||8080}`))).catch(error=>{console.error('Database initialization failed',error);process.exit(1)});

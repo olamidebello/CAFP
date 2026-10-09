@@ -34,3 +34,16 @@ CREATE TABLE IF NOT EXISTS invitations (
   FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 );
+CREATE TABLE IF NOT EXISTS media_assets (
+  id CHAR(36) PRIMARY KEY, tenant_id CHAR(36) NOT NULL, plot_id CHAR(36) NOT NULL,
+  device_id CHAR(36) NULL, created_by CHAR(36) NULL,
+  kind ENUM('photo','video') NOT NULL, mime_type VARCHAR(32) NOT NULL,
+  payload LONGBLOB NOT NULL, byte_count INT UNSIGNED NOT NULL,
+  captured_at DATETIME NOT NULL, note VARCHAR(500) NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_media_tenant (tenant_id,captured_at),
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+  FOREIGN KEY (plot_id) REFERENCES plots(id),
+  FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE SET NULL,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
